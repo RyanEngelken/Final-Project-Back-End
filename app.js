@@ -29,7 +29,7 @@ router.post('/users', async (req, res) => {
     }
 
     const allowedRoles = ['student', 'teacher', 'admin'];
-    const role = allowedRoles.includes(req.body.role) ? req.body.role : 'student'; // Default to 'student'
+    const role = allowedRoles.includes(req.body.role) ? req.body.role : 'student'; 
 
     const newUser = new User({
         username: req.body.username,

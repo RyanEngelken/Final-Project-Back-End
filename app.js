@@ -24,12 +24,12 @@ router.get('/courses', async (req, res) => {
 
 //creating a new user
 router.post('/users', async (req, res) => {
-    if (!req.body.username || !req.body.password) {
-        return res.status(400).json({ error: "Missing username or password" });
+    if (!req.body.username || !req.body.password || !req.body.role) {
+        return res.status(400).json({ error: "Missing username, password, or role" });
     }
 
-    const allowedRoles = ['user', 'teacher', 'admin'];
-    const role = allowedRoles.includes(req.body.role) ? req.body.role : 'user';
+    const allowedRoles = ['student', 'teacher', 'admin'];
+    const role = allowedRoles.includes(req.body.role) ? req.body.role : 'student'; // Default to 'student'
 
     const newUser = new User({
         username: req.body.username,
@@ -61,9 +61,10 @@ router.post('/auth', async (req, res) => {
         if (user.password !== req.body.password) {
             res.status(401).json({ error: "Bad password" });
         } else {
-            const token = jwt.sign({ username: user.username }, secret, { expiresIn: '1h' });
+            const token = jwt.sign({ username: user.username, role: user.role }, secret, { expiresIn: '1h' });
             res.json({
                 username: user.username,
+                role: user.role,
                 token: token,
                 auth: 1
             });

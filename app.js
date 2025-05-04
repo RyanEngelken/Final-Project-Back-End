@@ -1,149 +1,206 @@
 const express = require('express');
-const Course = require('./models/courses')
-var cors = require('cors')
-const app = express(); 
-app.use(cors())
-app.use(express.json())
-const router = express.Router();
-const User = require('./models/user')
-const bodyParser = require('body-parser')
-require('dotenv').config();
+const Course = require('./models/courses');
+const User = require('./models/user');
+const cors = require('cors');
+const bodyParser = require('body-parser');
 const jwt = require('jsonwebtoken');
-const secret = process.env.JWT_SECRET; 
+require('dotenv').config();
 
-//gets all courses
-router.get('/courses', async (req, res) => {
-    try {
-        const courses = await Course.find();
-        res.json(courses);
-        console.log(courses);
-    } catch (err) {
-        console.error(err);
+const { authenticateToken, authorizeTeachersOnly } = require('./models/auth');
+
+const app = express();
+const router = express.Router();
+
+const secret = process.env.JWT_SECRET;
+
+app.use(cors());
+app.use(express.json());
+app.use(bodyParser.json());
+
+// Get all courses 
+router.get('/courses', authenticateToken, async (req, res) => {
+  try {
+    const { enrolled, owner } = req.query;
+    let courses;
+    if (enrolled === 'true') {
+      courses = await Course.find({ enrolledUsers: req.user._id });
+    } else if (owner) {
+      if (!owner || owner === 'undefined' || !/^[0-9a-fA-F]{24}$/.test(owner)) {
+        return res.status(400).json({ error: 'Invalid owner ID' });
+      }
+      courses = await Course.find({ owner });
+    } else {
+      courses = await Course.find();
     }
-})
+    res.json(courses);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch courses' });
+  }
+});
 
-//creating a new user
+// Create new user
 router.post('/users', async (req, res) => {
-    if (!req.body.username || !req.body.password || !req.body.role) {
-        return res.status(400).json({ error: "Missing username, password, or role" });
+  if (!req.body.username || !req.body.password || !req.body.role) {
+    return res.status(400).json({ error: "Missing username, password, or role" });
+  }
+
+  const allowedRoles = ['student', 'teacher'];
+  const role = allowedRoles.includes(req.body.role) ? req.body.role : 'student';
+
+  const newUser = new User({
+    username: req.body.username,
+    password: req.body.password,
+    role: role
+  });
+
+  try {
+    await newUser.save();
+    res.sendStatus(201);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to create user" });
+  }
+});
+
+// User login 
+router.post('/auth', async (req, res) => {
+  if (!req.body.username || !req.body.password) {
+    return res.status(400).json({ error: "Missing username or password" });
+  }
+
+  let user = await User.findOne({ username: req.body.username });
+
+  if (!user || user.password !== req.body.password) {
+    return res.status(401).json({ error: "Invalid username or password" });
+  }
+
+  const token = jwt.sign(
+    { _id: user._id.toString(), username: user.username, role: user.role },
+    secret,
+    { expiresIn: '1h' }
+  );
+  res.json({
+    username: user.username,
+    role: user.role,
+    token: token,
+    _id: user._id,
+    auth: 1
+  });
+});
+
+// Auth status
+router.get('/status', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findOne({ username: req.user.username }, "username status");
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json({ username: user.username, status: user.status });
+  } catch (err) {
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Create course
+router.post('/courses', authenticateToken, authorizeTeachersOnly, async (req, res) => {
+  try {
+    if (req.user.role !== 'teacher') {
+      return res.status(403).json({ message: 'Only teachers can add courses' });
     }
 
-    const allowedRoles = ['student', 'teacher', 'admin'];
-    const role = allowedRoles.includes(req.body.role) ? req.body.role : 'student'; 
-
-    const newUser = new User({
-        username: req.body.username,
-        password: req.body.password,
-        role: role
+    const course = new Course({
+      ...req.body,
+      owner: req.user._id,
+      enrolledUsers: [req.user._id] 
     });
 
-    try {
-        await newUser.save();
-        console.log(newUser);
-        res.sendStatus(201);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Failed to create user" });
-    }
+    await course.save();
+    res.status(201).json(course);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
 });
 
-router.post('/auth', async (req, res) => {
-    if (!req.body.username || !req.body.password) {
-        res.status(400).json({ error: "Missing username or password" });
-        return;
-    }
-
-    let user = await User.findOne({ username: req.body.username });
-
-    if (!user) {
-        res.status(401).json({ error: "Bad Username" });
-    } else {
-        if (user.password !== req.body.password) {
-            res.status(401).json({ error: "Bad password" });
-        } else {
-            const token = jwt.sign({ username: user.username, role: user.role }, secret, { expiresIn: '1h' });
-            res.json({
-                username: user.username,
-                role: user.role,
-                token: token,
-                auth: 1
-            });
-        }
-    }
-});
-
-router.get('/status', async (req, res) => {
-    // Check if x-auth header exists
-    if (!req.headers["x-auth"]) {
-        return res.status(401).json({ error: "Missing X-Auth" });
-    }
-
-    const token = req.headers["x-auth"];
-    try {
-        // Decode the token using the secret
-        const decoded = jwt.verify(token, secret);  // Use jwt.verify to both decode and validate the token
-
-        // Find the user based on the username decoded from the token
-        let user = await User.findOne({ username: decoded.username }, "username status");
-
-        if (!user) {
-            return res.status(404).json({ error: "User not found" });
-        }
-
-        // Return the user's status
-        res.json({ username: user.username, status: user.status });
-    } catch (ex) {
-        return res.status(401).json({ error: "Invalid JWT" });
-    }
-});
-
-
-//creates a course
-router.post('/courses', async (req, res) => {
-    try {
-        const course = new Course(req.body);
-        await course.save();
-        res.status(201).json(course);
-        console.log(course);
-    } catch (err) {
-        console.error(err);
-    }
-})
-
-//gets a course by id
+// Get course by ID 
 router.get('/courses/:id', async (req, res) => {
-    try {
-        const course = await Course.findById(req.params.id);
-        if (!course) {
-            return res.status(404).send('Course not found');
-        }
-        res.json(course);
-    } catch (err) {
-        res.status(400).send(err);;
+  try {
+    const course = await Course.findById(req.params.id);
+    if (!course) {
+      return res.status(404).send('Course not found');
     }
-})
+    res.json(course);
+  } catch (err) {
+    res.status(400).send(err);
+  }
+});
 
-//updates a course
-router.put('/courses/:id', async (req, res) => {
-    try {
-        const course = req.body;
-        await Course.updateOne({ _id: req.params.id }, course);
-        res.sendStatus(204);
-    } catch (err) {
-        res.status(400).send(err);;
+// Update course 
+router.put('/courses/:id', authenticateToken, authorizeTeachersOnly, async (req, res) => {
+  const course = await Course.findById(req.params.id);
+  if (!course) return res.status(404).json({ message: 'Course not found' });
+
+  if (req.user.role !== 'teacher' || course.owner.toString() !== req.user._id.toString()) {
+    return res.status(403).json({ message: 'Not authorized to edit this course' });
+  }
+
+  Object.assign(course, req.body);
+  await course.save();
+  res.json(course);
+});
+
+// Delete course 
+router.delete('/courses/:id', authenticateToken, authorizeTeachersOnly, async (req, res) => {
+  const course = await Course.findById(req.params.id);
+  if (!course) return res.status(404).json({ message: 'Course not found' });
+
+  if (req.user.role !== 'teacher' || course.owner.toString() !== req.user._id.toString()) {
+    return res.status(403).json({ message: 'Not authorized to delete this course' });
+  }
+
+  await course.deleteOne();
+  res.json({ message: 'Course deleted' });
+});
+
+// Enroll in a course
+router.post('/courses/:id/enroll', authenticateToken, async (req, res) => {
+  try {
+    const course = await Course.findById(req.params.id);
+    if (!course) {
+      return res.status(404).json({ message: 'Course not found' });
     }
-})
 
-//deletes a course
-router.delete('/courses/:id', async (req, res) => {
-    try {
-        await Course.deleteOne({ _id: req.params.id });
-        res.sendStatus(204);
-    } catch (err) {
-        res.status(400).send(err);
+    if (course.enrolledUsers.includes(req.user._id)) {
+      return res.status(400).json({ message: 'User already enrolled in this course' });
     }
-})
 
+    course.enrolledUsers.push(req.user._id);
+    await course.save();
+    res.json({ message: 'Successfully enrolled in course' });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+});
+
+// Drop a course
+router.post('/courses/:id/drop', authenticateToken, async (req, res) => {
+  try {
+    const course = await Course.findById(req.params.id);
+    if (!course) {
+      return res.status(404).json({ message: 'Course not found' });
+    }
+
+    if (!course.enrolledUsers.includes(req.user._id)) {
+      return res.status(400).json({ message: 'User not enrolled in this course' });
+    }
+
+    course.enrolledUsers = course.enrolledUsers.filter(userId => userId.toString() !== req.user._id.toString());
+    await course.save();
+    res.json({ message: 'Successfully dropped the course' });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+});
 
 app.use("/api", router);
-app.listen(3000);
+app.listen(3000, () => console.log("Server running on http://localhost:3000"));

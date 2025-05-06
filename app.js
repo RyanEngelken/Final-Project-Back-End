@@ -20,18 +20,26 @@ app.use(bodyParser.json());
 // Get all courses 
 router.get('/courses', authenticateToken, async (req, res) => {
   try {
-    const { enrolled, owner } = req.query;
-    let courses;
+    const { enrolled, owner, search } = req.query;
+    let query = {};
+    
     if (enrolled === 'true') {
-      courses = await Course.find({ enrolledUsers: req.user._id });
+      query.enrolledUsers = req.user._id;
     } else if (owner) {
       if (!owner || owner === 'undefined' || !/^[0-9a-fA-F]{24}$/.test(owner)) {
         return res.status(400).json({ error: 'Invalid owner ID' });
       }
-      courses = await Course.find({ owner });
-    } else {
-      courses = await Course.find();
+      query.owner = owner;
     }
+    
+    if (search) {
+      query.$or = [
+        { courseId: { $regex: search, $options: 'i' } },
+        { courseName: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const courses = await Course.find(query);
     res.json(courses);
   } catch (err) {
     console.error(err);
@@ -87,19 +95,6 @@ router.post('/auth', async (req, res) => {
     _id: user._id,
     auth: 1
   });
-});
-
-// Auth status
-router.get('/status', authenticateToken, async (req, res) => {
-  try {
-    const user = await User.findOne({ username: req.user.username }, "username status");
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-    res.json({ username: user.username, status: user.status });
-  } catch (err) {
-    return res.status(500).json({ error: "Server error" });
-  }
 });
 
 // Create course

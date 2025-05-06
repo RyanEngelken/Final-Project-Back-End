@@ -1,5 +1,6 @@
 const db = require('../db');
 
+// User Schema
 const User = db.model("User", {
     username: { type: String, required: true, unique: true },
     password: { type: String, required: true },
